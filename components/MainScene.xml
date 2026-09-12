@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="MainScene" extends="Scene">
+    <script type="text/brightscript" uri="pkg:/components/MainScene.brs" />
+    <children>
+        <Video id="video"
+            translation="[0,0]"
+            width="1920"
+            height="1080"
+            visible="false" />
+        <Label id="statusLabel"
+            translation="[660,300]"
+            width="600"
+            height="80"
+            horizAlign="center"
+            vertAlign="center"
+            color="0xFFFFFFFF"
+            visible="false" />
+        <Timer id="retryTimer" duration="5" repeat="false" />
+    </children>
+</component>
