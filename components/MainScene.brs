@@ -5,9 +5,9 @@
 function GetDefaultPresets() as object
     return [
         {
-            name: "FFmpeg Local Stream (MPEG-TS)"
-            url: "http://192.168.18.206:8080/stream.ts"
-            format: "ts"
+            name: "CGPC Local Stream (HLS)"
+            url: "http://10.0.0.60:8888/stream/index.m3u8"
+            format: "hls"
         }
     ]
 end function
