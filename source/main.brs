@@ -6,10 +6,18 @@ sub Main()
     screen.show()
 
     while true
-        msg = wait(0, m.port)
+        ' Short timeout (not the usual 0/infinite) so this loop also
+        ' wakes up on its own to check the exitApp field directly,
+        ' rather than relying solely on a field-change notification
+        ' being delivered across threads.
+        msg = wait(30, m.port)
         msgType = type(msg)
         if msgType = "roSGScreenEvent"
             if msg.isScreenClosed() then return
+        end if
+
+        if scene.exitApp = true
+            return
         end if
     end while
 end sub

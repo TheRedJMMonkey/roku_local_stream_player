@@ -21,7 +21,17 @@ sub Init()
     m.retryTimer = m.top.findNode("retryTimer")
     m.retryTimer.observeField("fire", "onRetryTimer")
 
+    m.dialogReshowTimer = m.top.findNode("dialogReshowTimer")
+    m.dialogReshowTimer.observeField("fire", "onDialogReshowTimer")
+    m.pendingReshow = ""
+
     m.reg = CreateObject("roRegistrySection", "LocalStreamPlayer")
+
+    ' Used by onDialogWasClosed to tell an intentional close (we picked a
+    ' button and are navigating on purpose) apart from the user pressing
+    ' Back/Home with no button selected.
+    m.selectionHandled = false
+    m.currentScreen = ""
 
     LoadPresets()
 
@@ -58,6 +68,56 @@ sub SavePresets()
     m.reg.Flush()
 end sub
 
+' ============================== Dialog display + back-key handling ==============================
+' Roku's Dialog node is modal and dismisses itself automatically on
+' Back/Home before our Scene-level onKeyEvent ever sees the key press.
+' "wasClosed" fires for every kind of dismissal (button picked, Back/Home
+' pressed, or replaced by another dialog) - ShowDialog() wires it up
+' once for every dialog, and each "onXSelected" handler sets
+' m.selectionHandled = true first so onDialogWasClosed can tell an
+' intentional close from an unprompted Back/Home press.
+
+sub ShowDialog(dialog as object, screenName as string, onSelected as string)
+    m.currentScreen = screenName
+    dialog.observeField("buttonSelected", onSelected)
+    dialog.observeField("wasClosed", "onDialogWasClosed")
+    m.top.dialog = dialog
+end sub
+
+sub onDialogWasClosed(event as object)
+    if m.selectionHandled
+        m.selectionHandled = false
+        return
+    end if
+
+    ' Back/Home was pressed with nothing selected - go wherever that
+    ' screen's own "Back"/"Cancel" button would have gone. Deferred by
+    ' a tick rather than done here directly, since showing a new dialog
+    ' synchronously inside the previous one's own close handling doesn't
+    ' reliably render.
+    if m.currentScreen = "main"
+        m.pendingReshow = "exit"
+    else if m.currentScreen = "manage" or m.currentScreen = "customUrlKeyboard"
+        m.pendingReshow = "main"
+    else
+        ' presetAction, resetConfirm, nameKeyboard, urlKeyboard, formatDialog
+        m.pendingReshow = "manage"
+    end if
+
+    m.dialogReshowTimer.control = "start"
+end sub
+
+sub onDialogReshowTimer()
+    if m.pendingReshow = "exit"
+        m.top.exitApp = true
+    else if m.pendingReshow = "main"
+        ShowMainDialog()
+    else if m.pendingReshow = "manage"
+        ShowManageDialog()
+    end if
+    m.pendingReshow = ""
+end sub
+
 ' ============================== Main dialog ==============================
 
 sub ShowMainDialog()
@@ -74,12 +134,12 @@ sub ShowMainDialog()
     buttons.push("Exit")
     dialog.buttons = buttons
 
-    dialog.observeField("buttonSelected", "onMainDialogSelected")
     m.mainDialog = dialog
-    m.top.dialog = dialog
+    ShowDialog(dialog, "main", "onMainDialogSelected")
 end sub
 
 sub onMainDialogSelected(event as object)
+    m.selectionHandled = true
     index = event.getData()
     numPresets = m.presets.count()
     m.mainDialog.close = true
@@ -92,7 +152,7 @@ sub onMainDialogSelected(event as object)
     else if index = numPresets + 1
         ShowCustomUrlKeyboard()
     else
-        m.top.close = true
+        m.top.exitApp = true
     end if
 end sub
 
@@ -112,12 +172,12 @@ sub ShowManageDialog()
     buttons.push("Back")
     dialog.buttons = buttons
 
-    dialog.observeField("buttonSelected", "onManageDialogSelected")
     m.manageDialog = dialog
-    m.top.dialog = dialog
+    ShowDialog(dialog, "manage", "onManageDialogSelected")
 end sub
 
 sub onManageDialogSelected(event as object)
+    m.selectionHandled = true
     index = event.getData()
     numPresets = m.presets.count()
     m.manageDialog.close = true
@@ -138,12 +198,12 @@ sub ShowResetConfirmDialog()
     dialog.title = "Reset to Defaults"
     dialog.message = "This replaces all saved presets with the defaults. This cannot be undone."
     dialog.buttons = ["Reset", "Cancel"]
-    dialog.observeField("buttonSelected", "onResetConfirmSelected")
     m.resetDialog = dialog
-    m.top.dialog = dialog
+    ShowDialog(dialog, "resetConfirm", "onResetConfirmSelected")
 end sub
 
 sub onResetConfirmSelected(event as object)
+    m.selectionHandled = true
     index = event.getData()
     m.resetDialog.close = true
     if index = 0
@@ -162,12 +222,12 @@ sub ShowPresetActionDialog(index as integer)
     dialog.message = p.url
     dialog.buttons = ["Play", "Edit", "Delete", "Back"]
 
-    dialog.observeField("buttonSelected", "onPresetActionSelected")
     m.actionDialog = dialog
-    m.top.dialog = dialog
+    ShowDialog(dialog, "presetAction", "onPresetActionSelected")
 end sub
 
 sub onPresetActionSelected(event as object)
+    m.selectionHandled = true
     index = event.getData()
     m.actionDialog.close = true
     p = m.presets[m.actionIndex]
@@ -207,12 +267,12 @@ sub ShowNameKeyboard()
     kb.title = "Preset Name"
     kb.buttons = ["Next", "Cancel"]
     if m.pendingPreset.name <> "" then kb.keyboard.text = m.pendingPreset.name
-    kb.observeField("buttonSelected", "onNameEntered")
     m.nameKeyboard = kb
-    m.top.dialog = kb
+    ShowDialog(kb, "nameKeyboard", "onNameEntered")
 end sub
 
 sub onNameEntered(event as object)
+    m.selectionHandled = true
     index = event.getData()
     m.nameKeyboard.close = true
     if index = 0 and m.nameKeyboard.keyboard.text <> ""
@@ -228,12 +288,12 @@ sub ShowUrlKeyboard()
     kb.title = "Stream URL"
     kb.buttons = ["Next", "Cancel"]
     if m.pendingPreset.url <> "" then kb.keyboard.text = m.pendingPreset.url
-    kb.observeField("buttonSelected", "onUrlEntered")
     m.urlKeyboard = kb
-    m.top.dialog = kb
+    ShowDialog(kb, "urlKeyboard", "onUrlEntered")
 end sub
 
 sub onUrlEntered(event as object)
+    m.selectionHandled = true
     index = event.getData()
     m.urlKeyboard.close = true
     if index = 0 and m.urlKeyboard.keyboard.text <> ""
@@ -249,12 +309,12 @@ sub ShowFormatDialog()
     dialog.title = "Stream Format"
     dialog.message = "What kind of stream is this?"
     dialog.buttons = ["MP4 (progressive / fMP4)", "HLS (.m3u8)", "DASH (.mpd)", "MPEG-TS", "Cancel"]
-    dialog.observeField("buttonSelected", "onFormatSelected")
     m.formatDialog = dialog
-    m.top.dialog = dialog
+    ShowDialog(dialog, "formatDialog", "onFormatSelected")
 end sub
 
 sub onFormatSelected(event as object)
+    m.selectionHandled = true
     index = event.getData()
     m.formatDialog.close = true
 
@@ -287,12 +347,12 @@ sub ShowCustomUrlKeyboard()
     lastUrl = m.reg.Read("lastCustomUrl")
     if lastUrl <> invalid and lastUrl <> "" then kb.keyboard.text = lastUrl
 
-    kb.observeField("buttonSelected", "onCustomUrlEntered")
     m.customKeyboard = kb
-    m.top.dialog = kb
+    ShowDialog(kb, "customUrlKeyboard", "onCustomUrlEntered")
 end sub
 
 sub onCustomUrlEntered(event as object)
+    m.selectionHandled = true
     index = event.getData()
     m.customKeyboard.close = true
 
