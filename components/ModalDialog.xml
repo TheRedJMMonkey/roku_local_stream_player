@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<component name="ModalDialog" extends="Group">
+    <script type="text/brightscript" uri="pkg:/components/ModalDialog.brs" />
+    <interface>
+        <field id="title" type="string" />
+        <field id="message" type="string" />
+        <field id="buttons" type="array" />
+        <field id="selectedIndex" type="integer" alwaysNotify="true" />
+        <field id="visible" type="boolean" />
+    </interface>
+
+    <children>
+        <Rectangle id="overlay" color="0x121314FF" width="1920" height="1080" />
+
+        <Rectangle id="panel" />
+
+        <Label id="titleLabel"
+            horizAlign="center"
+            vertAlign="center"
+            font="font:MediumSystemFont" />
+
+        <Label id="messageLabel"
+            horizAlign="center"
+            vertAlign="center"
+            font="font:SmallSystemFont" />
+
+        <Group id="buttonGroup" />
+    </children>
+</component>

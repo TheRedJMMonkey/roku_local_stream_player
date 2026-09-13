@@ -1,29 +1,14 @@
-<?xml version="1.0" encoding="utf-8" ?>
+<?xml version="1.0" encoding="utf-8"?>
 <component name="MainScene" extends="Scene">
-    <script type="text/brightscript" uri="pkg:/components/MainScene.brs" />
+    <script id="script" type="text/brightscript" uri="pkg:/components/MainScene.brs" />
     <interface>
-        <!-- Scene nodes have no built-in "close" field. Setting this to
-             true signals main.brs (which owns the roSGScreen) to exit. -->
         <field id="exitApp" type="boolean" alwaysNotify="true" value="false" />
     </interface>
     <children>
-        <Video id="video"
-            translation="[0,0]"
-            width="1920"
-            height="1080"
-            visible="false" />
-        <Label id="statusLabel"
-            translation="[660,300]"
-            width="600"
-            height="80"
-            horizAlign="center"
-            vertAlign="center"
-            color="0xFFFFFFFF"
-            visible="false" />
+        <Video id="video" translation="[0,0]" width="1920" height="1080" visible="false" />
+        <Label id="statusLabel" translation="[660,300]" width="600" height="80" horizAlign="center"
+            vertAlign="center" color="0xFFFFFFFF" visible="false" />
         <Timer id="retryTimer" duration="5" repeat="false" />
-        <!-- Short delay before re-showing a dialog after the previous one
-             closed on its own (Back/Home), rather than doing it
-             synchronously inside that dialog's own close handling. -->
-        <Timer id="dialogReshowTimer" duration="0.05" repeat="false" />
+        <ModalDialog id="modal" visible="false" />
     </children>
 </component>

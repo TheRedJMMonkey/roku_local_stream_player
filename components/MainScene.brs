@@ -1,17 +1,3 @@
-' ============================================================
-' Default presets used the first time the app runs, and
-' whenever "Reset to Defaults" is used in the preset editor.
-' ============================================================
-function GetDefaultPresets() as object
-    return [
-        {
-            name: "CGPC Local Stream (HLS)"
-            url: "http://10.0.0.60:8888/stream/index.m3u8"
-            format: "hls"
-        }
-    ]
-end function
-
 sub Init()
     m.video = m.top.findNode("video")
     m.video.observeField("state", "onVideoStateChange")
@@ -21,25 +7,19 @@ sub Init()
     m.retryTimer = m.top.findNode("retryTimer")
     m.retryTimer.observeField("fire", "onRetryTimer")
 
-    m.dialogReshowTimer = m.top.findNode("dialogReshowTimer")
-    m.dialogReshowTimer.observeField("fire", "onDialogReshowTimer")
-    m.pendingReshow = ""
+    m.modal = m.top.findNode("modal")
 
     m.reg = CreateObject("roRegistrySection", "LocalStreamPlayer")
 
-    ' Used by onDialogWasClosed to tell an intentional close (we picked a
-    ' button and are navigating on purpose) apart from the user pressing
-    ' Back/Home with no button selected.
-    m.selectionHandled = false
     m.currentScreen = ""
+    m.pendingPreset = invalid
+    m.pendingIndex = invalid
 
     LoadPresets()
 
     m.top.backgroundColor = "0x000000FF"
     m.top.setFocus(true)
 
-    ' Skip the menu entirely when there's exactly one preset configured.
-    ' Back/Options still bring up the full menu at any time.
     if m.presets.count() = 1
         p = m.presets[0]
         PlayStream(p.url, p.format)
@@ -47,8 +27,6 @@ sub Init()
         ShowMainDialog()
     end if
 end sub
-
-' ============================== Persistence ==============================
 
 sub LoadPresets()
     stored = m.reg.Read("presets")
@@ -59,6 +37,7 @@ sub LoadPresets()
             return
         end if
     end if
+
     m.presets = GetDefaultPresets()
     SavePresets()
 end sub
@@ -68,186 +47,60 @@ sub SavePresets()
     m.reg.Flush()
 end sub
 
-' ============================== Dialog display + back-key handling ==============================
-' Roku's Dialog node is modal and dismisses itself automatically on
-' Back/Home before our Scene-level onKeyEvent ever sees the key press.
-' "wasClosed" fires for every kind of dismissal (button picked, Back/Home
-' pressed, or replaced by another dialog) - ShowDialog() wires it up
-' once for every dialog, and each "onXSelected" handler sets
-' m.selectionHandled = true first so onDialogWasClosed can tell an
-' intentional close from an unprompted Back/Home press.
+function GetDefaultPresets() as object
+    return [
+        {
+            name: "CGPC Local Stream (HLS)"
+            url: "http://10.0.0.60:8888/stream/index.m3u8"
+            format: "hls"
+        }
+    ]
+end function
 
-sub ShowDialog(dialog as object, screenName as string, onSelected as string)
+sub ShowModal(title as string, message as string, buttons as object, screenName as string)
     m.currentScreen = screenName
-    dialog.observeField("buttonSelected", onSelected)
-    dialog.observeField("wasClosed", "onDialogWasClosed")
-    m.top.dialog = dialog
+    m.modal.title = title
+    m.modal.message = message
+    m.modal.buttons = buttons
+    m.modal.selectedIndex = 0
+    m.modal.visible = true
+    m.modal.setFocus(true)
 end sub
 
-sub onDialogWasClosed(event as object)
-    if m.selectionHandled
-        m.selectionHandled = false
-        return
-    end if
-
-    ' Back/Home was pressed with nothing selected - go wherever that
-    ' screen's own "Back"/"Cancel" button would have gone. Deferred by
-    ' a tick rather than done here directly, since showing a new dialog
-    ' synchronously inside the previous one's own close handling doesn't
-    ' reliably render.
-    if m.currentScreen = "main"
-        m.pendingReshow = "exit"
-    else if m.currentScreen = "manage" or m.currentScreen = "customUrlKeyboard"
-        m.pendingReshow = "main"
-    else
-        ' presetAction, resetConfirm, nameKeyboard, urlKeyboard, formatDialog
-        m.pendingReshow = "manage"
-    end if
-
-    m.dialogReshowTimer.control = "start"
+sub CloseModal()
+    m.modal.visible = false
 end sub
-
-sub onDialogReshowTimer()
-    if m.pendingReshow = "exit"
-        m.top.exitApp = true
-    else if m.pendingReshow = "main"
-        ShowMainDialog()
-    else if m.pendingReshow = "manage"
-        ShowManageDialog()
-    end if
-    m.pendingReshow = ""
-end sub
-
-' ============================== Main dialog ==============================
 
 sub ShowMainDialog()
-    dialog = CreateObject("roSGNode", "Dialog")
-    dialog.title = "Select a Stream"
-    dialog.message = "Choose a preset, or manage/enter URLs below."
-
-    buttons = []
+    btns = []
     for each p in m.presets
-        buttons.push(p.name)
+        btns.push(p.name)
     end for
-    buttons.push("Manage Presets...")
-    buttons.push("Play Custom URL...")
-    buttons.push("Exit")
-    dialog.buttons = buttons
+    btns.push("Manage Presets...")
+    btns.push("Play Custom URL...")
+    btns.push("Exit")
 
-    m.mainDialog = dialog
-    ShowDialog(dialog, "main", "onMainDialogSelected")
+    ShowModal("Select a Stream", "Choose a preset, or manage/enter URLs below.", btns, "main")
 end sub
-
-sub onMainDialogSelected(event as object)
-    m.selectionHandled = true
-    index = event.getData()
-    numPresets = m.presets.count()
-    m.mainDialog.close = true
-
-    if index < numPresets
-        p = m.presets[index]
-        PlayStream(p.url, p.format)
-    else if index = numPresets
-        ShowManageDialog()
-    else if index = numPresets + 1
-        ShowCustomUrlKeyboard()
-    else
-        m.top.exitApp = true
-    end if
-end sub
-
-' ============================== Manage presets ==============================
 
 sub ShowManageDialog()
-    dialog = CreateObject("roSGNode", "Dialog")
-    dialog.title = "Manage Presets"
-    dialog.message = "Select a preset to play/edit/delete, or add a new one."
-
-    buttons = []
+    btns = []
     for each p in m.presets
-        buttons.push(p.name)
+        btns.push(p.name)
     end for
-    buttons.push("Add New Preset")
-    buttons.push("Reset to Defaults")
-    buttons.push("Back")
-    dialog.buttons = buttons
+    btns.push("Add New Preset")
+    btns.push("Reset to Defaults")
+    btns.push("Back")
 
-    m.manageDialog = dialog
-    ShowDialog(dialog, "manage", "onManageDialogSelected")
-end sub
-
-sub onManageDialogSelected(event as object)
-    m.selectionHandled = true
-    index = event.getData()
-    numPresets = m.presets.count()
-    m.manageDialog.close = true
-
-    if index < numPresets
-        ShowPresetActionDialog(index)
-    else if index = numPresets
-        StartAddPreset()
-    else if index = numPresets + 1
-        ShowResetConfirmDialog()
-    else
-        ShowMainDialog()
-    end if
-end sub
-
-sub ShowResetConfirmDialog()
-    dialog = CreateObject("roSGNode", "Dialog")
-    dialog.title = "Reset to Defaults"
-    dialog.message = "This replaces all saved presets with the defaults. This cannot be undone."
-    dialog.buttons = ["Reset", "Cancel"]
-    m.resetDialog = dialog
-    ShowDialog(dialog, "resetConfirm", "onResetConfirmSelected")
-end sub
-
-sub onResetConfirmSelected(event as object)
-    m.selectionHandled = true
-    index = event.getData()
-    m.resetDialog.close = true
-    if index = 0
-        m.presets = GetDefaultPresets()
-        SavePresets()
-    end if
-    ShowManageDialog()
+    ShowModal("Manage Presets", "Select a preset to play/edit/delete, or add a new one.", btns, "manage")
 end sub
 
 sub ShowPresetActionDialog(index as integer)
     m.actionIndex = index
     p = m.presets[index]
 
-    dialog = CreateObject("roSGNode", "Dialog")
-    dialog.title = p.name
-    dialog.message = p.url
-    dialog.buttons = ["Play", "Edit", "Delete", "Back"]
-
-    m.actionDialog = dialog
-    ShowDialog(dialog, "presetAction", "onPresetActionSelected")
+    ShowModal(p.name, p.url, ["Play", "Edit", "Delete", "Back"], "presetAction")
 end sub
-
-sub onPresetActionSelected(event as object)
-    m.selectionHandled = true
-    index = event.getData()
-    m.actionDialog.close = true
-    p = m.presets[m.actionIndex]
-
-    if index = 0 ' Play
-        PlayStream(p.url, p.format)
-    else if index = 1 ' Edit
-        StartEditPreset(m.actionIndex)
-    else if index = 2 ' Delete
-        m.presets.Delete(m.actionIndex)
-        SavePresets()
-        ShowManageDialog()
-    else ' Back
-        ShowManageDialog()
-    end if
-end sub
-
-' ============================== Add / edit preset flow ==============================
-' Both flows collect Name -> URL -> Format, then save.
-' m.pendingIndex = invalid means "add new"; otherwise it's the index being edited.
 
 sub StartAddPreset()
     m.pendingIndex = invalid
@@ -266,62 +119,128 @@ sub ShowNameKeyboard()
     kb = CreateObject("roSGNode", "KeyboardDialog")
     kb.title = "Preset Name"
     kb.buttons = ["Next", "Cancel"]
-    if m.pendingPreset.name <> "" then kb.keyboard.text = m.pendingPreset.name
-    m.nameKeyboard = kb
-    ShowDialog(kb, "nameKeyboard", "onNameEntered")
-end sub
+    kb.keyboard.text = m.pendingPreset.name
+    kb.observeField("buttonSelected", "onKeyboardButton")
 
-sub onNameEntered(event as object)
-    m.selectionHandled = true
-    index = event.getData()
-    m.nameKeyboard.close = true
-    if index = 0 and m.nameKeyboard.keyboard.text <> ""
-        m.pendingPreset.name = m.nameKeyboard.keyboard.text
-        ShowUrlKeyboard()
-    else
-        ShowManageDialog()
-    end if
+    m.nameKeyboard = kb
+    m.currentScreen = "nameKeyboard"
+    m.top.dialog = kb
 end sub
 
 sub ShowUrlKeyboard()
     kb = CreateObject("roSGNode", "KeyboardDialog")
     kb.title = "Stream URL"
     kb.buttons = ["Next", "Cancel"]
-    if m.pendingPreset.url <> "" then kb.keyboard.text = m.pendingPreset.url
+    kb.keyboard.text = m.pendingPreset.url
+    kb.observeField("buttonSelected", "onKeyboardButton")
+
     m.urlKeyboard = kb
-    ShowDialog(kb, "urlKeyboard", "onUrlEntered")
+    m.currentScreen = "urlKeyboard"
+    m.top.dialog = kb
 end sub
 
-sub onUrlEntered(event as object)
-    m.selectionHandled = true
-    index = event.getData()
-    m.urlKeyboard.close = true
-    if index = 0 and m.urlKeyboard.keyboard.text <> ""
-        m.pendingPreset.url = m.urlKeyboard.keyboard.text
-        ShowFormatDialog()
+sub ShowFormatDialog()
+    ShowModal("Stream Format", "What kind of stream is this?", ["MP4", "HLS", "DASH", "MPEG-TS", "Cancel"], "formatDialog")
+end sub
+
+sub ShowCustomUrlKeyboard()
+    kb = CreateObject("roSGNode", "KeyboardDialog")
+    kb.title = "Enter Stream URL"
+    kb.buttons = ["Play", "Cancel"]
+
+    lastUrl = m.reg.Read("lastCustomUrl")
+    if lastUrl <> invalid and lastUrl <> "" then kb.keyboard.text = lastUrl
+
+    kb.observeField("buttonSelected", "onKeyboardButton")
+
+    m.customKeyboard = kb
+    m.currentScreen = "customUrlKeyboard"
+    m.top.dialog = kb
+end sub
+
+sub HandleModalSelection()
+    idx = m.modal.selectedIndex
+    screen = m.currentScreen
+
+    CloseModal()
+
+    if screen = "main"
+        HandleMainSelection(idx)
+    else if screen = "manage"
+        HandleManageSelection(idx)
+    else if screen = "presetAction"
+        HandlePresetAction(idx)
+    else if screen = "formatDialog"
+        HandleFormatSelection(idx)
+    else if screen = "resetConfirm"
+        HandleResetConfirm(idx)
+    end if
+end sub
+
+sub HandleMainSelection(idx as integer)
+    numPresets = m.presets.count()
+
+    if idx < numPresets
+        p = m.presets[idx]
+        PlayStream(p.url, p.format)
+    else if idx = numPresets
+        ShowManageDialog()
+    else if idx = numPresets + 1
+        ShowCustomUrlKeyboard()
+    else
+        ExitClean()
+    end if
+end sub
+
+sub HandleManageSelection(idx as integer)
+    numPresets = m.presets.count()
+
+    if idx < numPresets
+        ShowPresetActionDialog(idx)
+    else if idx = numPresets
+        StartAddPreset()
+    else if idx = numPresets + 1
+        ShowResetConfirmDialog()
+    else
+        ShowMainDialog()
+    end if
+end sub
+
+sub ShowResetConfirmDialog()
+    ShowModal("Reset to Defaults", "This replaces all saved presets with the defaults.", ["Reset", "Cancel"], "resetConfirm")
+end sub
+
+sub HandleResetConfirm(idx as integer)
+    if idx = 0
+        m.presets = GetDefaultPresets()
+        SavePresets()
+    end if
+    ShowManageDialog()
+end sub
+
+sub HandlePresetAction(idx as integer)
+    p = m.presets[m.actionIndex]
+
+    if idx = 0
+        PlayStream(p.url, p.format)
+    else if idx = 1
+        StartEditPreset(m.actionIndex)
+    else if idx = 2
+        m.presets.Delete(m.actionIndex)
+        SavePresets()
+        ShowManageDialog()
     else
         ShowManageDialog()
     end if
 end sub
 
-sub ShowFormatDialog()
-    dialog = CreateObject("roSGNode", "Dialog")
-    dialog.title = "Stream Format"
-    dialog.message = "What kind of stream is this?"
-    dialog.buttons = ["MP4 (progressive / fMP4)", "HLS (.m3u8)", "DASH (.mpd)", "MPEG-TS", "Cancel"]
-    m.formatDialog = dialog
-    ShowDialog(dialog, "formatDialog", "onFormatSelected")
-end sub
-
-sub onFormatSelected(event as object)
-    m.selectionHandled = true
-    index = event.getData()
-    m.formatDialog.close = true
-
+sub HandleFormatSelection(idx as integer)
     formats = ["mp4", "hls", "dash", "ts"]
-    if index < formats.count()
-        m.pendingPreset.format = formats[index]
+
+    if idx < formats.count()
+        m.pendingPreset.format = formats[idx]
         SavePendingPreset()
+        ShowManageDialog()
     else
         ShowManageDialog()
     end if
@@ -334,53 +253,7 @@ sub SavePendingPreset()
         m.presets[m.pendingIndex] = m.pendingPreset
     end if
     SavePresets()
-    ShowManageDialog()
 end sub
-
-' ============================== One-off custom URL ==============================
-
-sub ShowCustomUrlKeyboard()
-    kb = CreateObject("roSGNode", "KeyboardDialog")
-    kb.title = "Enter Stream URL"
-    kb.buttons = ["Play", "Cancel"]
-
-    lastUrl = m.reg.Read("lastCustomUrl")
-    if lastUrl <> invalid and lastUrl <> "" then kb.keyboard.text = lastUrl
-
-    m.customKeyboard = kb
-    ShowDialog(kb, "customUrlKeyboard", "onCustomUrlEntered")
-end sub
-
-sub onCustomUrlEntered(event as object)
-    m.selectionHandled = true
-    index = event.getData()
-    m.customKeyboard.close = true
-
-    if index = 0
-        url = m.customKeyboard.keyboard.text
-        if url <> ""
-            m.reg.Write("lastCustomUrl", url)
-            m.reg.Flush()
-            PlayStream(url, GuessFormat(url))
-        else
-            ShowMainDialog()
-        end if
-    else
-        ShowMainDialog()
-    end if
-end sub
-
-' Best-effort format guess from the URL extension, used only
-' for one-off custom URLs (saved presets always store an explicit format).
-function GuessFormat(url as string) as string
-    lcUrl = LCase(url)
-    if Instr(1, lcUrl, ".m3u8") > 0 then return "hls"
-    if Instr(1, lcUrl, ".mpd") > 0 then return "dash"
-    if Instr(1, lcUrl, ".ts") > 0 then return "ts"
-    return "mp4"
-end function
-
-' ============================== Playback ==============================
 
 sub PlayStream(url as string, format as string)
     m.retryTimer.control = "stop"
@@ -417,10 +290,6 @@ sub onVideoStateChange(event as object)
     else if state = "buffering"
         ShowStatus("Connecting to stream...")
     else if state = "error" or state = "finished"
-        ' Stream isn't there (FFmpeg not running, YouTube not live, etc.)
-        ' Keep the video node up so the picture returns as soon as the
-        ' source comes back, but tell the user what's going on instead
-        ' of leaving a silent black screen, and retry automatically.
         ShowStatus("Stream not available - retrying in 5s (press Back for menu)")
         m.retryTimer.control = "start"
     end if
@@ -432,19 +301,88 @@ sub onRetryTimer()
     end if
 end sub
 
-' ============================== Remote control ==============================
-
 function onKeyEvent(key as string, press as boolean) as boolean
-    handled = false
-    if press and m.video.visible
+    if not press then return false
+
+    ' Custom modal
+    if m.modal.visible
+        if key = "OK"
+            HandleModalSelection()
+            return true
+        else if key = "back"
+            m.modal.selectedIndex = m.modal.buttons.count() - 1
+            HandleModalSelection()
+            return true
+        end if
+        return false
+    end if
+
+    ' Video navigation
+    if m.video.visible
         if key = "back" or key = "options"
             m.retryTimer.control = "stop"
             m.video.control = "stop"
             m.video.visible = false
             HideStatus()
             ShowMainDialog()
-            handled = true
+            return true
         end if
     end if
-    return handled
+
+    return false
 end function
+
+sub onKeyboardButton(event as object)
+    idx = event.getData()
+    dlg = event.getRoSGNode()
+    if dlg = invalid then return
+
+    btns = dlg.buttons
+    if btns = invalid then return
+    if idx < 0 or idx >= btns.count() then return
+
+    btn = btns[idx]
+
+    if btn = "Cancel"
+        m.top.dialog = invalid
+
+        if m.currentScreen = "nameKeyboard" or m.currentScreen = "urlKeyboard"
+            ShowManageDialog()
+        else if m.currentScreen = "customUrlKeyboard"
+            ShowMainDialog()
+        end if
+
+    else if btn = "Next"
+        if m.currentScreen = "nameKeyboard"
+            m.pendingPreset.name = dlg.keyboard.text
+            m.top.dialog = invalid
+            ShowUrlKeyboard()
+        else if m.currentScreen = "urlKeyboard"
+            m.pendingPreset.url = dlg.keyboard.text
+            m.top.dialog = invalid
+            ShowFormatDialog()
+        end if
+
+    else if btn = "Play"
+        url = dlg.keyboard.text
+        m.reg.Write("lastCustomUrl", url)
+        m.reg.Flush()
+        m.top.dialog = invalid
+        PlayStream(url, "hls")
+    end if
+end sub
+
+sub ExitClean()
+    m.modal.visible = false
+    m.video.visible = false
+    m.status.visible = false
+
+    m.top.backgroundColor = "0x000000FF"
+
+    children = m.top.getChildren(-1, 0)
+    for each c in children
+        c.visible = false
+    end for
+
+    m.top.exitApp = true
+end sub
