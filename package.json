@@ -1,0 +1,15 @@
+{
+    "name": "local-stream-player",
+    "version": "1.0.0",
+    "private": true,
+    "scripts": {
+        "build": "npm run clean && bsc --project bsconfig.json --create-package=false --retain-staging-dir=true",
+        "clean": "rm -rf out && rm -rf dist",
+        "watch": "npm run clean && bsc --project bsconfig.json --create-package=false --retain-staging-dir=true --watch",
+        "lint": "bslint"
+    },
+    "devDependencies": {
+        "brighterscript": "^0.73.3",
+        "@rokucommunity/bslint": "^0.8.46"
+    }
+}

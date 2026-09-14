@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <component name="MainScene" extends="Scene">
-    <script id="script" type="text/brightscript" uri="pkg:/components/MainScene.brs" />
     <interface>
         <field id="exitApp" type="boolean" alwaysNotify="true" value="false" />
     </interface>

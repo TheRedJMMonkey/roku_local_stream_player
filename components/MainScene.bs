@@ -1,0 +1,403 @@
+import "pkg:/source/Models.bs"
+
+sub init()
+    m.video = m.top.findNode("video")
+    m.video.observeFieldScoped("state", "onVideoStateChange")
+
+    m.status = m.top.findNode("statusLabel")
+
+    m.retryTimer = m.top.findNode("retryTimer")
+    m.retryTimer.observeFieldScoped("fire", "onRetryTimer")
+
+    m.modal = m.top.findNode("modal")
+    m.modal.observeFieldScoped("buttonSelected", "onModalButtonSelected")
+
+    ' The native KeyboardDialog auto-dismisses on Back/Home without ever firing
+    ' buttonSelected, so onKeyboardButton alone can't detect that case. Watching
+    ' the Scene's own "dialog" field catches it either way; this flag lets us tell
+    ' "we just closed it ourselves" apart from "the platform closed it on us".
+    m.dialogDismissedByApp = false
+    m.top.observeFieldScoped("dialog", "onDialogClosed")
+
+    m.reg = CreateObject("roRegistrySection", "LocalStreamPlayer")
+
+    m.currentScreen = ""
+    m.pendingPreset = invalid
+    m.pendingIndex = invalid
+
+    ' Dispatch table replaces a growing if/else-if chain keyed on screen name.
+    ' Keys are enum members, so a typo here is a compile error, not a silent no-op.
+    m.screenHandlers = {}
+    m.screenHandlers[Player.ScreenName.Main] = handleMainSelection
+    m.screenHandlers[Player.ScreenName.Manage] = handleManageSelection
+    m.screenHandlers[Player.ScreenName.PresetAction] = handlePresetAction
+    m.screenHandlers[Player.ScreenName.FormatDialog] = handleFormatSelection
+    m.screenHandlers[Player.ScreenName.ResetConfirm] = handleResetConfirm
+
+    loadPresets()
+
+    m.top.backgroundColor = "0x000000FF"
+    m.top.setFocus(true)
+
+    if m.presets.count() = 1
+        p = m.presets[0]
+        playStream(p.url, p.format)
+    else
+        showMainDialog()
+    end if
+end sub
+
+sub loadPresets()
+    stored = m.reg.Read("presets")
+    if stored <> invalid and stored <> ""
+        parsed = ParseJson(stored)
+        if parsed <> invalid and type(parsed) = "roArray"
+            presets = []
+            for each aa in parsed
+                presets.push(Player.presetFromAssociativeArray(aa))
+            end for
+            m.presets = presets
+            return
+        end if
+    end if
+
+    m.presets = Player.defaultPresets()
+    savePresets()
+end sub
+
+sub savePresets()
+    aa = []
+    for each p in m.presets
+        aa.push(p.toAssociativeArray())
+    end for
+    m.reg.Write("presets", FormatJson(aa))
+    m.reg.Flush()
+end sub
+
+sub showModal(title as string, message as string, buttons as object, screenName as string)
+    m.currentScreen = screenName
+    m.modal.content = { title: title, message: message, buttons: buttons }
+    m.modal.visible = true
+    m.modal.setFocus(true)
+end sub
+
+sub closeModal()
+    m.modal.visible = false
+end sub
+
+sub showMainDialog()
+    btns = []
+    for each p in m.presets
+        btns.push(p.name)
+    end for
+    btns.push("Manage Presets...")
+    btns.push("Play Custom URL...")
+    btns.push("Exit")
+
+    showModal("Select a Stream", "Choose a preset, or manage/enter URLs below.", btns, Player.ScreenName.Main)
+end sub
+
+sub showManageDialog()
+    btns = []
+    for each p in m.presets
+        btns.push(p.name)
+    end for
+    btns.push("Add New Preset")
+    btns.push("Reset to Defaults")
+    btns.push("Back")
+
+    showModal("Manage Presets", "Select a preset to play/edit/delete, or add a new one.", btns, Player.ScreenName.Manage)
+end sub
+
+sub showPresetActionDialog(index as integer)
+    m.actionIndex = index
+    p = m.presets[index]
+
+    showModal(p.name, p.url, ["Play", "Edit", "Delete", "Back"], Player.ScreenName.PresetAction)
+end sub
+
+sub startAddPreset()
+    m.pendingIndex = invalid
+    m.pendingPreset = new Player.Preset("", "", Player.StreamFormat.Mp4)
+    showNameKeyboard()
+end sub
+
+sub startEditPreset(index as integer)
+    m.pendingIndex = index
+    m.pendingPreset = m.presets[index].clone()
+    showNameKeyboard()
+end sub
+
+' Single helper for all three KeyboardDialog use sites below - they previously
+' differed only in title/buttons/initial text/screen name.
+sub showKeyboard(title as string, buttons as object, initialText as string, screenName as string)
+    kb = CreateObject("roSGNode", "KeyboardDialog")
+    kb.title = title
+    kb.buttons = buttons
+    if initialText <> "" then kb.keyboard.text = initialText
+    kb.observeFieldScoped("buttonSelected", "onKeyboardButton")
+
+    m.currentScreen = screenName
+    m.top.dialog = kb
+end sub
+
+' Use this instead of setting m.top.dialog = invalid directly, so onDialogClosed
+' can tell an app-initiated close apart from a platform-initiated one (Back/Home).
+sub closeKeyboard()
+    m.dialogDismissedByApp = true
+    m.top.dialog = invalid
+end sub
+
+' Fires whenever the Scene's "dialog" field changes - including when the platform
+' clears it after the user presses Back or Home on a native KeyboardDialog, which
+' never fires that dialog's own buttonSelected field. Without this, that path left
+' the app on a bare Scene background with nothing shown (the "blank gray screen").
+sub onDialogClosed()
+    if m.top.dialog <> invalid then return ' a new dialog was just opened
+
+    if m.dialogDismissedByApp
+        m.dialogDismissedByApp = false
+        return ' onKeyboardButton already handled navigation for this close
+    end if
+
+    ' Platform-driven close (Back/Home) with no buttonSelected event - treat it
+    ' the same as pressing that screen's own Cancel button.
+    if m.currentScreen = Player.ScreenName.NameKeyboard or m.currentScreen = Player.ScreenName.UrlKeyboard
+        showManageDialog()
+    else if m.currentScreen = Player.ScreenName.CustomUrlKeyboard
+        showMainDialog()
+    end if
+end sub
+
+sub showNameKeyboard()
+    showKeyboard("Preset Name", ["Next", "Cancel"], m.pendingPreset.name, Player.ScreenName.NameKeyboard)
+end sub
+
+sub showUrlKeyboard()
+    showKeyboard("Stream URL", ["Next", "Cancel"], m.pendingPreset.url, Player.ScreenName.UrlKeyboard)
+end sub
+
+sub showFormatDialog()
+    showModal("Stream Format", "What kind of stream is this?", ["MP4", "HLS", "DASH", "MPEG-TS", "Cancel"], Player.ScreenName.FormatDialog)
+end sub
+
+sub showCustomUrlKeyboard()
+    lastUrl = m.reg.Read("lastCustomUrl") ?? ""
+    showKeyboard("Enter Stream URL", ["Play", "Cancel"], lastUrl, Player.ScreenName.CustomUrlKeyboard)
+end sub
+
+' Replaces the old HandleModalSelection(), which read m.modal.selectedIndex directly
+' and required MainScene to poke that field on Back. ModalDialog now owns Back/OK
+' handling and reports the result through this single event, like KeyboardDialog does.
+sub onModalButtonSelected(event as object)
+    idx = event.getData()
+    screen = m.currentScreen
+
+    closeModal()
+
+    handler = m.screenHandlers[screen]
+    if handler <> invalid
+        handler(idx)
+    end if
+end sub
+
+sub handleMainSelection(idx as integer)
+    numPresets = m.presets.count()
+
+    if idx < numPresets
+        p = m.presets[idx]
+        playStream(p.url, p.format)
+    else if idx = numPresets
+        showManageDialog()
+    else if idx = numPresets + 1
+        showCustomUrlKeyboard()
+    else
+        exitClean()
+    end if
+end sub
+
+sub handleManageSelection(idx as integer)
+    numPresets = m.presets.count()
+
+    if idx < numPresets
+        showPresetActionDialog(idx)
+    else if idx = numPresets
+        startAddPreset()
+    else if idx = numPresets + 1
+        showResetConfirmDialog()
+    else
+        showMainDialog()
+    end if
+end sub
+
+sub showResetConfirmDialog()
+    showModal("Reset to Defaults", "This replaces all saved presets with the defaults.", ["Reset", "Cancel"], Player.ScreenName.ResetConfirm)
+end sub
+
+sub handleResetConfirm(idx as integer)
+    if idx = 0
+        m.presets = Player.defaultPresets()
+        savePresets()
+    end if
+    showManageDialog()
+end sub
+
+sub handlePresetAction(idx as integer)
+    p = m.presets[m.actionIndex]
+
+    if idx = 0
+        playStream(p.url, p.format)
+    else if idx = 1
+        startEditPreset(m.actionIndex)
+    else if idx = 2
+        m.presets.Delete(m.actionIndex)
+        savePresets()
+        showManageDialog()
+    else
+        showManageDialog()
+    end if
+end sub
+
+sub handleFormatSelection(idx as integer)
+    formats = [Player.StreamFormat.Mp4, Player.StreamFormat.Hls, Player.StreamFormat.Dash, Player.StreamFormat.MpegTs]
+
+    if idx < formats.count()
+        m.pendingPreset.format = formats[idx]
+        savePendingPreset()
+        showManageDialog()
+    else
+        showManageDialog()
+    end if
+end sub
+
+sub savePendingPreset()
+    if m.pendingIndex = invalid
+        m.presets.push(m.pendingPreset)
+    else
+        m.presets[m.pendingIndex] = m.pendingPreset
+    end if
+    savePresets()
+end sub
+
+sub playStream(url as string, format as string)
+    m.retryTimer.control = "stop"
+    m.currentUrl = url
+    m.currentFormat = format
+
+    content = CreateObject("roSGNode", "ContentNode")
+    content.url = url
+    content.streamFormat = format
+    content.live = true
+
+    m.video.content = content
+    m.video.visible = true
+    m.video.control = "play"
+    m.video.setFocus(true)
+
+    showStatus("Connecting to stream...")
+end sub
+
+sub showStatus(text as string)
+    m.status.text = text
+    m.status.visible = true
+end sub
+
+sub hideStatus()
+    m.status.visible = false
+end sub
+
+sub onVideoStateChange(event as object)
+    state = event.getData()
+
+    if state = "playing"
+        hideStatus()
+    else if state = "buffering"
+        showStatus("Connecting to stream...")
+    else if state = "error" or state = "finished"
+        ' Template string reads the retry duration from the timer node itself, so it
+        ' can never drift out of sync with retryTimer's actual "duration" in the XML.
+        showStatus(`Stream not available - retrying in ${m.retryTimer.duration}s (press Back for menu)`)
+        m.retryTimer.control = "start"
+    end if
+end sub
+
+sub onRetryTimer()
+    if m.currentUrl <> invalid
+        playStream(m.currentUrl, m.currentFormat)
+    end if
+end sub
+
+' The modal-visible branch that used to live here is gone: ModalDialog now handles
+' its own up/down/OK/back and only reports results via onModalButtonSelected, so
+' those keys never bubble up to the scene while the modal has focus.
+function onKeyEvent(key as string, press as boolean) as boolean
+    if not press then return false
+
+    if m.video.visible
+        if key = Player.RemoteKey.Back or key = Player.RemoteKey.Options
+            m.retryTimer.control = "stop"
+            m.video.control = "stop"
+            m.video.visible = false
+            hideStatus()
+            showMainDialog()
+            return true
+        end if
+    end if
+
+    return false
+end function
+
+sub onKeyboardButton(event as object)
+    idx = event.getData()
+    dlg = event.getRoSGNode()
+    if dlg = invalid then return
+
+    btns = dlg.buttons
+    if btns = invalid then return
+    if idx < 0 or idx >= btns.count() then return
+
+    btn = btns[idx]
+
+    if btn = "Cancel"
+        closeKeyboard()
+
+        if m.currentScreen = Player.ScreenName.NameKeyboard or m.currentScreen = Player.ScreenName.UrlKeyboard
+            showManageDialog()
+        else if m.currentScreen = Player.ScreenName.CustomUrlKeyboard
+            showMainDialog()
+        end if
+
+    else if btn = "Next"
+        if m.currentScreen = Player.ScreenName.NameKeyboard
+            m.pendingPreset.name = dlg.keyboard.text
+            closeKeyboard()
+            showUrlKeyboard()
+        else if m.currentScreen = Player.ScreenName.UrlKeyboard
+            m.pendingPreset.url = dlg.keyboard.text
+            closeKeyboard()
+            showFormatDialog()
+        end if
+
+    else if btn = "Play"
+        url = dlg.keyboard.text
+        m.reg.Write("lastCustomUrl", url)
+        m.reg.Flush()
+        closeKeyboard()
+        playStream(url, "hls")
+    end if
+end sub
+
+sub exitClean()
+    m.modal.visible = false
+    m.video.visible = false
+    m.status.visible = false
+
+    m.top.backgroundColor = "0x000000FF"
+
+    children = m.top.getChildren(-1, 0)
+    for each c in children
+        c.visible = false
+    end for
+
+    m.top.exitApp = true
+end sub

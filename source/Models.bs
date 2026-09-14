@@ -1,0 +1,64 @@
+' Shared model layer for the app. Anything that used to be a magic string
+' (screen names, stream formats, remote key names) is an enum here, so a typo
+' anywhere it's used is a compile-time error instead of a silent no-op.
+namespace Player
+
+    enum ScreenName
+        Main = "main"
+        Manage = "manage"
+        PresetAction = "presetAction"
+        FormatDialog = "formatDialog"
+        ResetConfirm = "resetConfirm"
+        NameKeyboard = "nameKeyboard"
+        UrlKeyboard = "urlKeyboard"
+        CustomUrlKeyboard = "customUrlKeyboard"
+    end enum
+
+    enum StreamFormat
+        Mp4 = "mp4"
+        Hls = "hls"
+        Dash = "dash"
+        MpegTs = "ts"
+    end enum
+
+    enum RemoteKey
+        Up = "up"
+        Down = "down"
+        Ok = "OK"
+        Back = "back"
+        Options = "options"
+    end enum
+
+    class Preset
+        public name as string
+        public url as string
+        public format as string
+
+        function new(name as string, url as string, format as string)
+            m.name = name
+            m.url = url
+            m.format = format
+        end function
+
+        function clone() as Preset
+            return new Preset(m.name, m.url, m.format)
+        end function
+
+        ' Presets are persisted as JSON via roRegistrySection, which only speaks
+        ' plain associative arrays - this is the one place that boundary is crossed.
+        function toAssociativeArray() as object
+            return { name: m.name, url: m.url, format: m.format }
+        end function
+    end class
+
+    function presetFromAssociativeArray(aa as object) as Preset
+        return new Preset(aa.name, aa.url, aa.format)
+    end function
+
+    function defaultPresets() as object
+        return [
+            new Preset("CGPC Local Stream (HLS)", "http://10.0.0.60:8888/stream/index.m3u8", StreamFormat.Hls)
+        ]
+    end function
+
+end namespace

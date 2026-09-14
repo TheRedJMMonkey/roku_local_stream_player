@@ -1,0 +1,203 @@
+import "pkg:/source/Models.bs"
+
+' A single button row: a background Rectangle ("outer"), an inset Rectangle ("inner")
+' for the selection border, and a Label - three nodes, built once and recolored in
+' place by setSelected() rather than being torn down and rebuilt on every keypress.
+class ModalButtonRow
+    public outer as object
+    public inner as object
+    private buttonColor as string
+    private highlightColor as string
+    private highlightBorderColor as string
+
+    function new(label as string, width as integer, height as integer, borderThickness as integer, style as object)
+        m.buttonColor = style.buttonColor
+        m.highlightColor = style.highlightColor
+        m.highlightBorderColor = style.highlightBorderColor
+
+        m.outer = CreateObject("roSGNode", "Rectangle")
+        m.outer.width = width
+        m.outer.height = height
+
+        m.inner = CreateObject("roSGNode", "Rectangle")
+        m.inner.translation = [borderThickness, borderThickness]
+        m.inner.width = width - borderThickness * 2
+        m.inner.height = height - borderThickness * 2
+        m.outer.appendChild(m.inner)
+
+        text = CreateObject("roSGNode", "Label")
+        text.text = label
+        text.width = width
+        text.height = height
+        text.horizAlign = "center"
+        text.vertAlign = "center"
+        text.font = "font:MediumSystemFont"
+        text.color = style.textColor
+        m.outer.appendChild(text)
+    end function
+
+    sub mount(parent as object)
+        parent.appendChild(m.outer)
+    end sub
+
+    sub setSelected(selected as boolean)
+        if selected
+            m.outer.color = m.highlightBorderColor
+            m.inner.color = m.highlightColor
+        else
+            m.outer.color = m.buttonColor
+            m.inner.color = m.buttonColor
+        end if
+    end sub
+end class
+
+sub init()
+    m.panel = m.top.findNode("panel")
+    m.contentGroup = m.top.findNode("contentGroup")
+    m.titleLabel = m.top.findNode("titleLabel")
+    m.messageLabel = m.top.findNode("messageLabel")
+    m.buttonList = m.top.findNode("buttonList")
+
+    ' --- Layout constants (computed once, not per-render) ---
+    m.paddingPanel = 40
+    m.paddingMessage = 24
+    m.contentWidth = 820
+    m.titleTextHeight = 40
+    m.messageLineHeight = 30
+    m.buttonTextHeight = 30
+    m.buttonPadding = 16
+    m.buttonSpacing = 16
+    m.borderThickness = 2
+    m.buttonHeight = m.buttonPadding * 2 + m.buttonTextHeight
+
+    ' --- VS Code Dark 2026 colors ---
+    m.panelColor = "0x1E1E1EFF"
+    m.titleColor = "0xD4D4D4FF"
+    m.messageColor = "0xB0B0B0FF"
+    ' Bundled once so ModalButtonRow takes one style argument instead of four
+    ' separate color strings that are easy to pass in the wrong order.
+    m.rowStyle = {
+        textColor: "0xCCCCCCFF"
+        buttonColor: "0x2D2D2DFF"
+        highlightColor: "0x313233FF"
+        highlightBorderColor: "0x387995FF"
+    }
+
+    m.buttons = []
+    m.rows = []
+    m.selectedIndex = 0
+
+    m.contentGroup.itemSpacings = [0, m.paddingMessage]
+    m.buttonList.itemSpacings = [m.buttonSpacing]
+
+    m.top.observeFieldScoped("content", "onContentChange")
+end sub
+
+' Rebuilds the whole dialog. Runs once per ShowModal() call (content changes), not on
+' every keypress - navigation is handled separately by renderSelection().
+sub onContentChange()
+    content = m.top.content
+    if content = invalid then return
+
+    m.titleLabel.text = content.title
+    m.messageLabel.text = content.message
+    m.buttons = content.buttons ?? []
+
+    buildButtonRows(m.buttons)
+    layoutPanel(m.buttons.count(), content.message)
+
+    m.selectedIndex = 0
+    renderSelection()
+end sub
+
+' Creates the fixed set of button-row objects for this dialog. Selection changes
+' never add/remove nodes; they only recolor outer/inner (see renderSelection).
+sub buildButtonRows(buttons as object)
+    for each c in m.buttonList.getChildren(-1, 0)
+        m.buttonList.removeChild(c)
+    end for
+    m.rows = []
+
+    for each label in buttons
+        row = new ModalButtonRow(label, m.contentWidth, m.buttonHeight, m.borderThickness, m.rowStyle)
+        row.mount(m.buttonList)
+        m.rows.push(row)
+    end for
+end sub
+
+' O(row count) color updates only - no node creation. Called on every up/down press.
+sub renderSelection()
+    for i = 0 to m.rows.count() - 1
+        m.rows[i].setSelected(i = m.selectedIndex)
+    end for
+end sub
+
+sub layoutPanel(btnCount as integer, message as string)
+    msgLines = 1
+    if message <> invalid
+        msgLines = message.split(chr(10)).count()
+    end if
+    messageHeight = msgLines * m.messageLineHeight
+
+    totalButtonHeight = 0
+    if btnCount > 0
+        totalButtonHeight = btnCount * m.buttonHeight + (btnCount - 1) * m.buttonSpacing
+    end if
+
+    panelWidth = m.paddingPanel * 2 + m.contentWidth
+    contentHeight = m.titleTextHeight + messageHeight + m.paddingMessage + totalButtonHeight
+    panelHeight = m.paddingPanel * 2 + contentHeight
+
+    panelX = (1920 - panelWidth) / 2
+    panelY = (1080 - panelHeight) / 2
+
+    m.panel.width = panelWidth
+    m.panel.height = panelHeight
+    m.panel.translation = [panelX, panelY]
+    m.panel.color = m.panelColor
+
+    m.titleLabel.width = m.contentWidth
+    m.titleLabel.height = m.titleTextHeight
+    m.titleLabel.color = m.titleColor
+
+    m.messageLabel.width = m.contentWidth
+    m.messageLabel.height = messageHeight
+    m.messageLabel.color = m.messageColor
+
+    m.contentGroup.translation = [panelX + m.paddingPanel, panelY + m.paddingPanel]
+end sub
+
+' Owns all of its own key handling - up/down move the highlight, OK/Back both resolve
+' to a single buttonSelected event so the caller only has to observe one field
+' (matching the pattern of the native KeyboardDialog's buttonSelected field).
+function onKeyEvent(key as string, press as boolean) as boolean
+    if not press then return false
+    if m.buttons.count() = 0 then return false
+
+    if key = Player.RemoteKey.Up
+        if m.selectedIndex > 0
+            m.selectedIndex -= 1
+            renderSelection()
+        end if
+        return true
+
+    else if key = Player.RemoteKey.Down
+        if m.selectedIndex < m.buttons.count() - 1
+            m.selectedIndex += 1
+            renderSelection()
+        end if
+        return true
+
+    else if key = Player.RemoteKey.Ok
+        m.top.buttonSelected = m.selectedIndex
+        return true
+
+    else if key = Player.RemoteKey.Back
+        ' Convention (owned here, not by callers): the last button in any modal is
+        ' the safe/cancel action, so Back acts as if it were pressed.
+        m.top.buttonSelected = m.buttons.count() - 1
+        return true
+    end if
+
+    return false
+end function
